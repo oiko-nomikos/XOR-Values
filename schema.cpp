@@ -313,10 +313,13 @@ class XORCompress {
 
                 if ((A != '0' && A != '1') || (B != '0' && B != '1')) {
                     throw std::runtime_error("Invalid bit");
+                    // there is no such thing as an invalid bit
+                    // but we can still throw a error if we encounter something unexpected
                 }
 
                 xored.push_back(A == B ? '0' : '1');
                 key.push_back(A);
+                // if A is equivilent to B, we choose 0 else 1, either get pushed back into the key
             }
 
             xoredLayers.push_back(xored);
