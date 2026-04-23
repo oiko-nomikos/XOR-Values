@@ -114,4 +114,4 @@ SUCCESS: data restored correctly
 
 ---
 
-Oiko Nomikos
+©Oiko Nomikos
