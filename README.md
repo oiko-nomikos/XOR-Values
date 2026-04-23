@@ -114,4 +114,6 @@ SUCCESS: data restored correctly
 
 ---
 
+Designed and developed with VS code, the NSA and ChatGPT.
+
 ©Oiko Nomikos
