@@ -1,3 +1,10 @@
+
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
+// Header Files
+//----------------------------------------------------------------------------------
+
 #include <iostream>
 #include <vector>
 #include <string>
@@ -18,6 +25,14 @@
 //----------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------
+// Global Constants
+//----------------------------------------------------------------------------------
+
+std::string fileName = "XORedCompressedData.txt";
+
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
 
 class SystemClock {
   public:
@@ -29,6 +44,50 @@ class SystemClock {
 
 // Global Instance
 inline SystemClock systemClock;
+
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
+
+class Functions {
+  public:
+    // ----------------------------
+    // UNUSED (KEEP IF NEEDED)
+    // ----------------------------
+    std::string stringToBinaryASCII(const std::string &input) {
+        std::string binary;
+        binary.reserve(input.size() * 8);
+
+        for (char c : input) {
+            std::bitset<8> bits(static_cast<unsigned char>(c));
+            binary += bits.to_string();
+        }
+
+        while ((binary.size() & (binary.size() - 1)) != 0) {
+            binary.push_back('0');
+        }
+
+        return binary;
+    }
+
+    std::string binaryASCIIToString(const std::string &binary) {
+        if (binary.size() % 8 != 0) {
+            throw std::runtime_error("Binary length must be multiple of 8");
+        }
+
+        std::string output;
+        output.reserve(binary.size() / 8);
+
+        for (size_t i = 0; i < binary.size(); i += 8) {
+            std::bitset<8> bits(binary.substr(i, 8));
+            output.push_back(static_cast<char>(bits.to_ulong()));
+        }
+
+        return output;
+    }
+};
+
+inline Functions functions;
 
 //----------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------
@@ -318,17 +377,17 @@ class XORCompress {
         return {data, keys, xoredLayers, layers};
     }
 
-    inline std::string decompress(const Result &r) {
-        if (r.keys.size() != r.xoredLayers.size()) {
+    inline std::string decompress(const Result &result) {
+        if (result.keys.size() != result.xoredLayers.size()) {
             throw std::runtime_error("Invalid structure");
         }
 
-        std::string data = r.final;
+        std::string data = result.final;
 
         // rebuild backwards
-        for (int level = (int)r.layers - 1; level >= 0; --level) {
-            const std::string &key = r.keys[level];
-            const std::string &xored = r.xoredLayers[level];
+        for (int level = (int)result.layers - 1; level >= 0; --level) {
+            const std::string &key = result.keys[level];
+            const std::string &xored = result.xoredLayers[level];
 
             std::string prev;
             prev.reserve(key.size() * 2);
@@ -354,70 +413,99 @@ class XORCompress {
         return data;
     }
 
-    inline void writeToFile(const std::string &filename, const XORCompress::Result &result) {
-        std::ofstream out(filename); // ⚠️ no std::ios::binary
-        if (!out)
-            throw std::runtime_error("Failed to open file for writing");
+    std::string decompressFromFile(std::size_t layers, const std::string &final, const std::string &lastKey) {
+        std::string data = final;
 
-        out << "-------------------------------------\n";
-        out << "XOR Compressor\n";
-        out << "-------------------------------------\n";
-        out << "Final bit:  " << result.final << "\n";
-        out << "-------------------------------------\n";
-        out << "Keys:\n";
-        for (std::size_t i = 0; i < result.keys.size(); ++i) {
-            out << "Layer " << i << ": " << result.keys[i] << "\n";
-        }
-        out << "-------------------------------------\n";
-        out << "XORed Layers:\n";
-        for (std::size_t i = 0; i < result.xoredLayers.size(); ++i) {
-            out << "Layer " << i << ": " << result.xoredLayers[i] << "\n";
-        }
-        out << "-------------------------------------\n";
-        out << "Layers: " << result.layers << "\n";
-        out << "-------------------------------------\n";
+        for (int level = (int)layers - 1; level >= 0; --level) {
 
-        out.close();
+            std::string prev;
+            prev.reserve(lastKey.size() * 2);
+
+            for (char K : lastKey) {
+                char A = K;
+                char B = (K == '0') ? '1' : '0'; // deterministic guess
+
+                prev.push_back(A);
+                prev.push_back(B);
+            }
+
+            data = prev;
+        }
+
+        return data;
     }
 
-    inline void readFromFile(const std::string &filename, std::size_t &layers, std::string &final, std::string &lastKey) {
+    inline void writeToFile(const std::string &filename, const XORCompress::Result &r) {
+        std::ofstream out(filename);
+        if (!out)
+            throw std::runtime_error("Failed to open file");
+
+        out << "-----\nFINAL\n" << r.final << "\n";
+        out << "-----\nLAYERS\n" << r.layers << "\n";
+
+        out << "-----\nKEYS\n";
+        for (const auto &k : r.keys)
+            out << k << "\n";
+
+        out << "-----\nXOR\n";
+        for (const auto &x : r.xoredLayers)
+            out << x << "\n";
+
+        out << "-----\n";
+    }
+
+    inline XORCompress::Result readFromFile(const std::string &filename) {
         std::ifstream in(filename);
         if (!in)
-            throw std::runtime_error("Failed to open file for reading");
+            throw std::runtime_error("Failed to open file");
+
+        XORCompress::Result r;
 
         std::string line;
 
-        while (std::getline(in, line)) {
-            if (line.find("Layers:") == 0) {
-                layers = std::stoull(line.substr(7));
-            } else if (line.find("Final:") == 0) {
-                final = line.substr(6);
-            } else if (line.find("LastKey:") == 0) {
-                lastKey = line.substr(8);
+        auto nextNonDash = [&]() {
+            while (std::getline(in, line)) {
+                if (line.find("-----") == std::string::npos)
+                    return true;
             }
+            return false;
+        };
+
+        // ---------------- FINAL ----------------
+        nextNonDash(); // FINAL
+        std::getline(in, r.final);
+
+        // ---------------- LAYERS ----------------
+        nextNonDash(); // LAYERS
+        std::getline(in, line);
+        r.layers = std::stoull(line);
+
+        // ---------------- KEYS ----------------
+        nextNonDash(); // KEYS
+        while (std::getline(in, line) && line.find("-----") == std::string::npos) {
+            if (!line.empty())
+                r.keys.push_back(line);
         }
 
-        in.close();
-
-        // basic validation
-        if (final.empty() || lastKey.empty() || layers == 0) {
-            throw std::runtime_error("Invalid file format");
+        // ---------------- XOR ----------------
+        nextNonDash(); // XOR
+        while (std::getline(in, line) && line.find("-----") == std::string::npos) {
+            if (!line.empty())
+                r.xoredLayers.push_back(line);
         }
+
+        // ---------------- VALIDATION ----------------
+        if (r.final.empty())
+            throw std::runtime_error("Missing final");
+
+        if (r.layers == 0)
+            throw std::runtime_error("Missing layers");
+
+        if (r.keys.size() != r.xoredLayers.size())
+            throw std::runtime_error("Corrupt file");
+
+        return r;
     }
-
-    /*
-    -------------------------------------
-    XOR Compressor
-    -------------------------------------
-    final bit:      ?
-    ------------------------------------
-    Keys:           ?
-    -------------------------------------
-    XORed Layers:   ?
-    -------------------------------------
-    Layers:         ?
-    -------------------------------------
-    */
 };
 
 //----------------------------------------------------------------------------------
@@ -435,9 +523,6 @@ class UserInterface {
             std::string input = bep.get(64);
             std::cout << "bitstream: " << input << "\n\n";
 
-            // ----------------------------
-            // COMPRESS PROMPT
-            // ----------------------------
             if (!askYesNo("Do you want to compress the data? (y/n): ")) {
                 std::cout << "Compression skipped.\n";
                 return;
@@ -445,20 +530,17 @@ class UserInterface {
 
             std::cout << "Compressing...\n";
 
-            XORCompress::Result result = compressor.compress(input);
+            result = compressor.compress(input);
 
             compress(result);
             output(result);
 
-            // ----------------------------
-            // DECOMPRESS PROMPT
-            // ----------------------------
             if (!askYesNo("\nDo you want to decompress the data? (y/n): ")) {
                 std::cout << "Decompression skipped.\n";
                 return;
             }
 
-            decompress(result, input);
+            decompress(input);
 
         } catch (const std::exception &e) {
             std::cerr << "Error: " << e.what() << "\n";
@@ -471,11 +553,10 @@ class UserInterface {
   private:
     XORCompress compressor;
     BinaryEntropyPool bep;
+
+    XORCompress::Result result;
     std::string fileName = "XORedCompressedData.txt";
 
-    // ----------------------------
-    // CLEAN INPUT HANDLER
-    // ----------------------------
     bool askYesNo(const std::string &msg) {
         std::cout << msg;
 
@@ -486,8 +567,6 @@ class UserInterface {
         return (choice == 'y' || choice == 'Y');
     }
 
-    // ----------------------------
-    // COMPRESS OUTPUT
     // ----------------------------
     void compress(const XORCompress::Result &result) {
         std::cout << "\nWriting compressed data to file...\n";
@@ -502,74 +581,40 @@ class UserInterface {
     }
 
     // ----------------------------
-    // DECOMPRESS
-    // ----------------------------
-    void decompress(const XORCompress::Result &result, const std::string &input) {
+    void decompress(const std::string &input) {
+        std::cout << "\nReading compressed file...\n";
 
-        std::cout << "\nDecompressing...\n";
+        XORCompress::Result result = compressor.readFromFile(fileName);
+
+        std::cout << "Read Layers: " << result.layers << "\n";
+        std::cout << "Read Final: " << result.final << "\n";
+
+        std::cout << "\nReconstructing from file...\n";
 
         std::string restored = compressor.decompress(result);
 
         std::cout << "Restored: " << restored << "\n";
 
         if (restored == input) {
-            std::cout << "SUCCESS: data restored correctly\n";
+            std::cout << "SUCCESS\n";
         } else {
-            std::cout << "FAIL: mismatch\n";
+            std::cout << "FAIL\n";
         }
     }
 
-    // ----------------------------
-    // OUTPUT DEBUG INFO
-    // ----------------------------
     void output(const XORCompress::Result &result) {
         std::cout << "Final bit: " << result.final << "\n";
         std::cout << "Layers: " << result.layers << "\n";
 
         std::cout << "\nKeys:\n";
-        for (std::size_t i = 0; i < result.keys.size(); ++i) {
+        for (size_t i = 0; i < result.keys.size(); ++i) {
             std::cout << "Layer " << i << ": " << result.keys[i] << "\n";
         }
 
         std::cout << "\nXored layers:\n";
-        for (std::size_t i = 0; i < result.xoredLayers.size(); ++i) {
+        for (size_t i = 0; i < result.xoredLayers.size(); ++i) {
             std::cout << "Layer " << i << ": " << result.xoredLayers[i] << "\n";
         }
-    }
-
-    // ----------------------------
-    // UNUSED (KEEP IF NEEDED)
-    // ----------------------------
-    std::string stringToBinaryASCII(const std::string &input) {
-        std::string binary;
-        binary.reserve(input.size() * 8);
-
-        for (char c : input) {
-            std::bitset<8> bits(static_cast<unsigned char>(c));
-            binary += bits.to_string();
-        }
-
-        while ((binary.size() & (binary.size() - 1)) != 0) {
-            binary.push_back('0');
-        }
-
-        return binary;
-    }
-
-    std::string binaryASCIIToString(const std::string &binary) {
-        if (binary.size() % 8 != 0) {
-            throw std::runtime_error("Binary length must be multiple of 8");
-        }
-
-        std::string output;
-        output.reserve(binary.size() / 8);
-
-        for (size_t i = 0; i < binary.size(); i += 8) {
-            std::bitset<8> bits(binary.substr(i, 8));
-            output.push_back(static_cast<char>(bits.to_ulong()));
-        }
-
-        return output;
     }
 };
 
