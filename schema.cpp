@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cctype>
 #include <bitset>
+#include <fstream>
+#include <limits>
 
 //----------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------
@@ -19,21 +21,6 @@
 
 class SystemClock {
   public:
-    inline long long getSeconds() {
-        auto now = std::chrono::system_clock::now();
-        return std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-    }
-
-    inline long long getMilliseconds() {
-        auto now = std::chrono::system_clock::now();
-        return std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    }
-
-    inline long long getMicroseconds() {
-        auto now = std::chrono::system_clock::now();
-        return std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-    }
-
     inline long long getNanoseconds() {
         auto now = std::chrono::system_clock::now();
         return std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
@@ -290,7 +277,7 @@ class XORCompress {
         std::size_t layers;
     };
 
-    Result compress(std::string data) {
+    inline Result compress(std::string data) {
         if (data.empty() || (data.size() & (data.size() - 1)) != 0) {
             throw std::runtime_error("Size must be a power of 2");
         }
@@ -313,13 +300,10 @@ class XORCompress {
 
                 if ((A != '0' && A != '1') || (B != '0' && B != '1')) {
                     throw std::runtime_error("Invalid bit");
-                    // there is no such thing as an invalid bit
-                    // but we can still throw a error if we encounter something unexpected
                 }
 
                 xored.push_back(A == B ? '0' : '1');
                 key.push_back(A);
-                // if A is equivilent to B, we choose 0 else 1, either get pushed back into the key
             }
 
             xoredLayers.push_back(xored);
@@ -334,7 +318,7 @@ class XORCompress {
         return {data, keys, xoredLayers, layers};
     }
 
-    std::string decompress(const Result &r) {
+    inline std::string decompress(const Result &r) {
         if (r.keys.size() != r.xoredLayers.size()) {
             throw std::runtime_error("Invalid structure");
         }
@@ -370,6 +354,192 @@ class XORCompress {
         return data;
     }
 
+    inline void writeToFile(const std::string &filename, const XORCompress::Result &result) {
+        std::ofstream out(filename); // ⚠️ no std::ios::binary
+        if (!out)
+            throw std::runtime_error("Failed to open file for writing");
+
+        out << "-------------------------------------\n";
+        out << "XOR Compressor\n";
+        out << "-------------------------------------\n";
+        out << "Final bit:  " << result.final << "\n";
+        out << "-------------------------------------\n";
+        out << "Keys:\n";
+        for (std::size_t i = 0; i < result.keys.size(); ++i) {
+            out << "Layer " << i << ": " << result.keys[i] << "\n";
+        }
+        out << "-------------------------------------\n";
+        out << "XORed Layers:\n";
+        for (std::size_t i = 0; i < result.xoredLayers.size(); ++i) {
+            out << "Layer " << i << ": " << result.xoredLayers[i] << "\n";
+        }
+        out << "-------------------------------------\n";
+        out << "Layers: " << result.layers << "\n";
+        out << "-------------------------------------\n";
+
+        out.close();
+    }
+
+    inline void readFromFile(const std::string &filename, std::size_t &layers, std::string &final, std::string &lastKey) {
+        std::ifstream in(filename);
+        if (!in)
+            throw std::runtime_error("Failed to open file for reading");
+
+        std::string line;
+
+        while (std::getline(in, line)) {
+            if (line.find("Layers:") == 0) {
+                layers = std::stoull(line.substr(7));
+            } else if (line.find("Final:") == 0) {
+                final = line.substr(6);
+            } else if (line.find("LastKey:") == 0) {
+                lastKey = line.substr(8);
+            }
+        }
+
+        in.close();
+
+        // basic validation
+        if (final.empty() || lastKey.empty() || layers == 0) {
+            throw std::runtime_error("Invalid file format");
+        }
+    }
+
+    /*
+    -------------------------------------
+    XOR Compressor
+    -------------------------------------
+    final bit:      ?
+    ------------------------------------
+    Keys:           ?
+    -------------------------------------
+    XORed Layers:   ?
+    -------------------------------------
+    Layers:         ?
+    -------------------------------------
+    */
+};
+
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
+
+class UserInterface {
+  public:
+    void run() {
+        std::cout << "Welcome to the Program...\n";
+        std::cout << "\nPress Enter to continue...\n";
+        std::cin.get();
+
+        try {
+            std::string input = bep.get(64);
+            std::cout << "bitstream: " << input << "\n\n";
+
+            // ----------------------------
+            // COMPRESS PROMPT
+            // ----------------------------
+            if (!askYesNo("Do you want to compress the data? (y/n): ")) {
+                std::cout << "Compression skipped.\n";
+                return;
+            }
+
+            std::cout << "Compressing...\n";
+
+            XORCompress::Result result = compressor.compress(input);
+
+            compress(result);
+            output(result);
+
+            // ----------------------------
+            // DECOMPRESS PROMPT
+            // ----------------------------
+            if (!askYesNo("\nDo you want to decompress the data? (y/n): ")) {
+                std::cout << "Decompression skipped.\n";
+                return;
+            }
+
+            decompress(result, input);
+
+        } catch (const std::exception &e) {
+            std::cerr << "Error: " << e.what() << "\n";
+        }
+
+        std::cout << "\nPress Enter to exit...";
+        std::cin.get();
+    }
+
+  private:
+    XORCompress compressor;
+    BinaryEntropyPool bep;
+    std::string fileName = "XORedCompressedData.txt";
+
+    // ----------------------------
+    // CLEAN INPUT HANDLER
+    // ----------------------------
+    bool askYesNo(const std::string &msg) {
+        std::cout << msg;
+
+        char choice{};
+        std::cin >> choice;
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+        return (choice == 'y' || choice == 'Y');
+    }
+
+    // ----------------------------
+    // COMPRESS OUTPUT
+    // ----------------------------
+    void compress(const XORCompress::Result &result) {
+        std::cout << "\nWriting compressed data to file...\n";
+
+        if (result.final.size() != 1) {
+            throw std::runtime_error("Final is not 1 bit!");
+        }
+
+        compressor.writeToFile(fileName, result);
+
+        std::cout << "File written: " << fileName << "\n";
+    }
+
+    // ----------------------------
+    // DECOMPRESS
+    // ----------------------------
+    void decompress(const XORCompress::Result &result, const std::string &input) {
+
+        std::cout << "\nDecompressing...\n";
+
+        std::string restored = compressor.decompress(result);
+
+        std::cout << "Restored: " << restored << "\n";
+
+        if (restored == input) {
+            std::cout << "SUCCESS: data restored correctly\n";
+        } else {
+            std::cout << "FAIL: mismatch\n";
+        }
+    }
+
+    // ----------------------------
+    // OUTPUT DEBUG INFO
+    // ----------------------------
+    void output(const XORCompress::Result &result) {
+        std::cout << "Final bit: " << result.final << "\n";
+        std::cout << "Layers: " << result.layers << "\n";
+
+        std::cout << "\nKeys:\n";
+        for (std::size_t i = 0; i < result.keys.size(); ++i) {
+            std::cout << "Layer " << i << ": " << result.keys[i] << "\n";
+        }
+
+        std::cout << "\nXored layers:\n";
+        for (std::size_t i = 0; i < result.xoredLayers.size(); ++i) {
+            std::cout << "Layer " << i << ": " << result.xoredLayers[i] << "\n";
+        }
+    }
+
+    // ----------------------------
+    // UNUSED (KEEP IF NEEDED)
+    // ----------------------------
     std::string stringToBinaryASCII(const std::string &input) {
         std::string binary;
         binary.reserve(input.size() * 8);
@@ -388,16 +558,15 @@ class XORCompress {
 
     std::string binaryASCIIToString(const std::string &binary) {
         if (binary.size() % 8 != 0) {
-            throw std::runtime_error("Binary length must be a multiple of 8");
+            throw std::runtime_error("Binary length must be multiple of 8");
         }
 
         std::string output;
         output.reserve(binary.size() / 8);
 
-        for (std::size_t i = 0; i < binary.size(); i += 8) {
+        for (size_t i = 0; i < binary.size(); i += 8) {
             std::bitset<8> bits(binary.substr(i, 8));
-            char c = static_cast<char>(bits.to_ulong());
-            output.push_back(c);
+            output.push_back(static_cast<char>(bits.to_ulong()));
         }
 
         return output;
@@ -409,69 +578,12 @@ class XORCompress {
 //----------------------------------------------------------------------------------
 
 int main() {
-    try {
-        std::cout << "Welcome to the Program...\n";
-
-        // Pause for user input
-        std::cout << "\nPress Enter to continue...\n";
-        std::cin.get(); // waits until Enter is pressed
-
-        XORCompress compressor;
-        BinaryEntropyPool bep;
-        std::string input = bep.get(64);
-        std::cout << "bitstream:  " << input << "\n\n";
-
-        /*
-        std::cout << "1:1 In the beginning when God created the heavens and the earth, "
-                  << "1:2 the earth was a formless void and darkness covered the face of the deep, "
-                  << "while a wind from God swept over the face of the waters. "
-                  << "1:3 Then God said, 'Let there be light'; and there was light.\n";
-
-        std::string input = "1:1 In the beginning when God created the heavens and the earth, "
-                            "1:2 the earth was a formless void and darkness covered the face of the deep, "
-                            "while a wind from God swept over the face of the waters. "
-                            "1:3 Then God said, 'Let there be light'; and there was light.";
-
-        std::string binary = compressor.stringToBinaryASCII(input);
-        */
-
-        std::cout << "Compressing...\n";
-
-        // Compress
-        XORCompress::Result result = compressor.compress(input);
-
-        std::cout << "Final bit: " << result.final << "\n";
-        std::cout << "Layers: " << result.layers << "\n";
-
-        std::cout << "\nKeys:\n";
-        for (std::size_t i = 0; i < result.keys.size(); ++i) {
-            std::cout << "Layer " << i << ": " << result.keys[i] << "\n";
-        }
-
-        std::cout << "\nXored layers:\n";
-        for (std::size_t i = 0; i < result.xoredLayers.size(); ++i) {
-            std::cout << "Layer " << i << ": " << result.xoredLayers[i] << "\n";
-        }
-
-        // Decompress
-        std::string restored = compressor.decompress(result);
-        // restored = compressor.binaryASCIIToString(restored);
-        std::cout << "\nRestored: " << restored << "\n";
-
-        // Verify correctness
-        if (restored == input) { // input else "binary"
-            std::cout << "SUCCESS: data restored correctly\n";
-        } else {
-            std::cout << "FAIL: mismatch\n";
-        }
-
-    } catch (const std::exception &e) {
-        std::cerr << "Error: " << e.what() << "\n";
-    }
-
-    // Pause for user input
-    std::cout << "\nPress Enter to exit...";
-    std::cin.get(); // waits until Enter is pressed
+    UserInterface ui;
+    ui.run();
 
     return 0;
 }
+
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------
