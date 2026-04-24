@@ -440,69 +440,130 @@ class XORCompress {
         if (!out)
             throw std::runtime_error("Failed to open file");
 
-        out << "-----\nFINAL\n" << r.final << "\n";
-        out << "-----\nLAYERS\n" << r.layers << "\n";
+        out << "==================================================\n";
+        out << "                XOR COMPRESSOR\n";
+        out << "==================================================\n\n";
 
-        out << "-----\nKEYS\n";
-        for (const auto &k : r.keys)
-            out << k << "\n";
+        out << "-------------------- META ------------------------\n";
+        out << "FINAL:\n" << r.final << "\n\n";
 
-        out << "-----\nXOR\n";
-        for (const auto &x : r.xoredLayers)
-            out << x << "\n";
+        out << "LAYERS:\n" << r.layers << "\n\n";
 
-        out << "-----\n";
+        out << "-------------------- KEYS ------------------------\n";
+        for (size_t i = 0; i < r.keys.size(); i++)
+            out << "[" << i << "] " << r.keys[i] << "\n";
+
+        out << "\n-------------------- XOR LAYERS ------------------\n";
+        for (size_t i = 0; i < r.xoredLayers.size(); i++)
+            out << "[" << i << "] " << r.xoredLayers[i] << "\n";
+
+        out << "\n==================================================\n";
     }
-
     inline XORCompress::Result readFromFile(const std::string &filename) {
         std::ifstream in(filename);
         if (!in)
             throw std::runtime_error("Failed to open file");
 
         XORCompress::Result r;
-
         std::string line;
 
-        auto nextNonDash = [&]() {
-            while (std::getline(in, line)) {
-                if (line.find("-----") == std::string::npos)
-                    return true;
+        enum class Section { NONE, META, KEYS, XOR };
+
+        Section section = Section::NONE;
+
+        while (std::getline(in, line)) {
+
+            // -------------------- SECTION DETECTION --------------------
+            if (line.find("META") != std::string::npos) {
+                section = Section::META;
+                continue;
             }
-            return false;
+
+            if (line.find("KEYS") != std::string::npos) {
+                section = Section::KEYS;
+                continue;
+            }
+
+            if (line.find("XOR LAYERS") != std::string::npos) {
+                section = Section::XOR;
+                continue;
+            }
+
+            // ignore formatting lines
+            if (line.find("====") != std::string::npos || line.find("----------------") != std::string::npos)
+                continue;
+
+            // -------------------- PARSING --------------------
+            switch (section) {
+
+            case Section::META: {
+                if (line.find("FINAL:") != std::string::npos) {
+                    std::getline(in, r.final);
+                } else if (line.find("LAYERS:") != std::string::npos) {
+                    std::getline(in, line);
+                    r.layers = std::stoull(line);
+                }
+                break;
+            }
+
+            case Section::KEYS: {
+                if (!line.empty() && line[0] == '[') {
+                    size_t pos = line.find(']');
+                    if (pos != std::string::npos) {
+                        r.keys.push_back(line.substr(pos + 1));
+                    }
+                }
+                break;
+            }
+
+            case Section::XOR: {
+                if (!line.empty() && line[0] == '[') {
+                    size_t pos = line.find(']');
+                    if (pos != std::string::npos) {
+                        r.xoredLayers.push_back(line.substr(pos + 1));
+                    }
+                }
+                break;
+            }
+
+            default:
+                break;
+            }
+        }
+
+        // -------------------- CLEANUP --------------------
+        auto trim = [](std::string &s) {
+            size_t a = s.find_first_not_of(" \t");
+            size_t b = s.find_last_not_of(" \t");
+            if (a == std::string::npos) {
+                s.clear();
+                return;
+            }
+            s = s.substr(a, b - a + 1);
         };
 
-        // ---------------- FINAL ----------------
-        nextNonDash(); // FINAL
-        std::getline(in, r.final);
+        trim(r.final);
 
-        // ---------------- LAYERS ----------------
-        nextNonDash(); // LAYERS
-        std::getline(in, line);
-        r.layers = std::stoull(line);
+        for (auto &k : r.keys)
+            trim(k);
+        for (auto &x : r.xoredLayers)
+            trim(x);
 
-        // ---------------- KEYS ----------------
-        nextNonDash(); // KEYS
-        while (std::getline(in, line) && line.find("-----") == std::string::npos) {
-            if (!line.empty())
-                r.keys.push_back(line);
-        }
-
-        // ---------------- XOR ----------------
-        nextNonDash(); // XOR
-        while (std::getline(in, line) && line.find("-----") == std::string::npos) {
-            if (!line.empty())
-                r.xoredLayers.push_back(line);
-        }
-
-        // ---------------- VALIDATION ----------------
+        // -------------------- VALIDATION --------------------
         if (r.final.empty())
-            throw std::runtime_error("Missing final");
+            throw std::runtime_error("Missing FINAL");
 
         if (r.layers == 0)
-            throw std::runtime_error("Missing layers");
+            throw std::runtime_error("Missing LAYERS");
+
+        if (r.keys.empty())
+            throw std::runtime_error("Missing KEYS");
+
+        if (r.xoredLayers.empty())
+            throw std::runtime_error("Missing XOR LAYERS");
 
         if (r.keys.size() != r.xoredLayers.size())
-            throw std::runtime_error("Corrupt file");
+            throw std::runtime_error("Corrupt file (mismatch)");
 
         return r;
     }
